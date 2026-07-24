@@ -1,0 +1,3 @@
+# Contains the basic-auth password and site-local secrets. Copy from a
+# teammate or recreate per HOWTO.md section 4.
+.env
