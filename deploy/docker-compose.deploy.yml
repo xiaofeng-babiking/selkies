@@ -27,3 +27,11 @@ services:
       - /home/jing.feng/selkies-data:/home/ubuntu/Documents
       # Extra supervisord program: serves supersplat/dist on 127.0.0.1:8082
       - ./supervisor-supersplat.conf:/etc/supervisor/conf.d/supersplat.conf:ro
+      # Host mount-point dir: rslave so a share mounted there on the host
+      # after container start becomes visible inside without a recreate
+      - type: bind
+        source: /home/jing.feng/mounts/selkies-mount-data
+        target: /home/ubuntu/mount-data
+        bind:
+          propagation: rslave
+          create_host_path: true

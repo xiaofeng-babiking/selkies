@@ -48,7 +48,23 @@ Division of labor — know what is and isn't on the GPU:
   ```
 
 - A data directory for your scenes: `~/selkies-data` (mounted as `~/Documents`
-  in the desktop — this is the only persistent directory).
+  in the desktop), and `~/mounts/selkies-mount-data` (mounted as
+  `~/mount-data`, with `rslave` propagation — a share mounted there on the
+  host *after* container start appears inside without a recreate). These two
+  are the only persistent directories.
+
+  Ownership caveat: the host dirs belong to `jing.feng` (mode 755) while the
+  desktop user is `ubuntu` (uid 1000), so the desktop can *read* them but not
+  *write*. To allow saves from inside the desktop (no sudo needed, XFS
+  supports ACLs):
+
+  ```bash
+  setfacl -R -m u:1000:rwx ~/selkies-data
+  find ~/selkies-data -type d -exec setfacl -m d:u:1000:rwx {} +   # new files inherit
+  ```
+
+  (For `~/mounts/selkies-mount-data` this only matters while it is a plain
+  dir — once a share is mounted over it, the share's own uid-mapping rules.)
 - Free host ports: `8080` (web), `8081`/`8082` (loopback), `3478` (TURN),
   UDP `49152–65535` (TURN relays). The container uses **host networking**.
 
@@ -56,7 +72,9 @@ Division of labor — know what is and isn't on the GPU:
 
 - `docker-compose.deploy.yml` — the single `selkies` service. Highlights:
   `network_mode: host`, `runtime: nvidia`, `shm_size: 2gb`,
-  mounts `supersplat` (read-only), `selkies-data`, and the supervisor include below.
+  mounts `supersplat` (read-only), `selkies-data`,
+  `mounts/selkies-mount-data` (long syntax for `rslave` propagation),
+  and the supervisor include below.
 - `.env` — all site-specific settings (image, auth password, GPU index, TURN).
   Mode 600; the plaintext password lives here and nowhere else.
 - `supervisor-supersplat.conf` — extra supervisord program mounted into the
@@ -67,9 +85,10 @@ Division of labor — know what is and isn't on the GPU:
 
 1. **`SELKIES_TURN_HOST` / `TURN_EXTERNAL_IP`** — the host IP that *client
    laptops can actually route to*. On a multi-homed host pick the ethernet
-   interface (here `10.19.2.98` on bond0), not the InfiniBand one
-   (`10.10.100.3` on ibs110). Re-check after any lab re-addressing — a stale
-   IP here is invisible until streams fail.
+   interface (here `10.19.2.97` on bond0), not the InfiniBand one
+   (`10.10.100.4` on ibs110). Re-check after any lab re-addressing — a stale
+   IP here is invisible until streams fail. (Already bitten once: this host
+   moved from `.98` to `.97` on 2026-07-24.)
 2. **`TURN_EXTRA_ARGS=--relay-ip=<same ethernet IP>`** — REQUIRED on
    multi-homed hosts. Without it coturn binds relay sockets on the
    primary-route interface while advertising the external IP; media
@@ -97,7 +116,8 @@ docker-compose -f docker-compose.deploy.yml --env-file .env up -d --force-recrea
 selkies' "wait for X" check false-pass against a dead display — it crashes 5×
 in seconds and supervisord gives up (`FATAL`). A fresh container has an empty
 `/tmp`, so every readiness gate actually waits. (Nothing of value lives in the
-container layer; only `~/selkies-data` persists, on the host.)
+container layer; only the host mounts — `~/selkies-data` and
+`~/mounts/selkies-mount-data` — persist.)
 
 Startup takes ~20–30 s. Then launch SuperSplat's browser once per recreate:
 
@@ -121,14 +141,15 @@ docker exec selkies-supersplat supervisorctl status
 curl --noproxy '*' -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8080/
 curl --noproxy '*' -s -o /dev/null -w '%{http_code}\n' -u jing:<pw> http://127.0.0.1:8080/
 
-# 3. RTC config advertises the right relay:  expect "turn:10.19.2.98:3478?transport=tcp"
+# 3. RTC config advertises the right relay:  expect "turn:10.19.2.97:3478?transport=tcp"
 curl --noproxy '*' -s -u jing:<pw> http://127.0.0.1:8080/turn | grep -o '"turn:[^"]*"'
 
 # 4. SuperSplat served:  expect <title>SuperSplat
 curl --noproxy '*' -s http://127.0.0.1:8082/ | grep -o '<title>[^<]*'
 
-# 5. Relay binds on the advertised interface:  expect 10.19.2.98
-docker exec selkies-supersplat grep "Local relay addr" /tmp/selkies-gstreamer-entrypoint.log | tail -2
+# 5. Relay binds on the advertised interface:  expect "Relay address to use: 10.19.2.97"
+#    ("Local relay addr" lines only appear once a client holds an allocation)
+docker exec selkies-supersplat grep "Relay address to use" /tmp/selkies-gstreamer-entrypoint.log
 
 # 6. GL really reaches the A100:  expect "OpenGL renderer ... NVIDIA A100"
 docker exec selkies-supersplat bash -c 'DISPLAY=:20 vglrun -d egl glxinfo -B | grep renderer'
@@ -136,17 +157,18 @@ docker exec selkies-supersplat bash -c 'DISPLAY=:20 vglrun -d egl glxinfo -B | g
 # 7. (Optional) End-to-end TURN relay echo — 100% received proves the media path:
 docker exec selkies-supersplat bash -c '
   PW=$(tr "\0" "\n" < /proc/$(pgrep -x turnserver | head -1)/cmdline | grep -m1 "^--user=" | sed "s/--user=selkies://")
-  turnutils_uclient -t -u selkies -w "$PW" -y -n 5 10.19.2.98 2>&1 | tail -2'
+  turnutils_uclient -t -u selkies -w "$PW" -y -n 5 10.19.2.97 2>&1 | tail -2'
 ```
 
 ## 7. Use
 
-1. Open `http://10.19.2.98:8080` from your laptop (add the IP to your browser's
+1. Open `http://10.19.2.97:8080` from your laptop (add the IP to your browser's
    proxy-bypass list if you use the corporate proxy). Log in with the
    credentials from `.env`.
 2. The streamed Xfce desktop appears with Firefox already on SuperSplat
-   (`localhost:8082`). Load/save scenes via `~/Documents` (= host
-   `~/selkies-data`).
+   (`localhost:8082`). Scenes live in `~/Documents` (= host `~/selkies-data`);
+   bulk data in `~/mount-data` (= host `~/mounts/selkies-mount-data`). Both
+   are read-only from inside the desktop until you grant ACLs (§2).
 3. Sanity check inside the stream: SuperSplat's WebGL renderer will report an
    NVIDIA string (Firefox masks the exact model as "GeForce 8800 GTX, or
    similar" for anti-fingerprinting — NVIDIA = A100; `llvmpipe`/"Software"
@@ -167,11 +189,13 @@ docker exec selkies-supersplat bash -c '
 | Symptom | Cause → fix |
 |---------|-------------|
 | Browser stuck at spinner, "Waiting for stream" | ICE/media failure. Check coturn lines in `/tmp/selkies-gstreamer-entrypoint.log`: allocations with `peer usage: rp=0, rb=0` + `allocation timeout` = relay black hole → verify `--relay-ip` (§4.2) and `transport=tcp` (§4.3). Client side: Firefox `about:webrtc` shows which candidate pair stalls. |
+| "Waiting for stream" but ICE/DTLS fine (log shows `opened peer data channel` and then `pipeline stopped` **twice** per attempt; signaling loops alternating `'0' command 'SESSION 1'` / `'2' command 'SESSION 3'`) | **Two browser tabs** are open on the page — selkies is single-session and each tab preempts the other, so neither ever streams. Close all tabs, open exactly one. Quick check: `ss -tnp \| grep :8080` on the host shows one websocket per tab. If it still won't stream after closing tabs (stale session state: `CLOSE-WAIT` ICE sockets, `SCTP_SEND_FAILED_EVENT` spam), `docker exec selkies-supersplat supervisorctl restart selkies-gstreamer` — restarts only the app + coturn, desktop and Firefox survive. |
 | `selkies-gstreamer FATAL` in supervisorctl | Stale container state after `docker start` → recreate (§5). |
 | `curl` to the service returns 503 | You forgot `--noproxy '*'` — that 503 is the corporate proxy, not selkies. |
 | Stream connects but no video / instant disconnects | Someone set `SELKIES_ENCODER=nvh264enc` — A100 has no NVENC; restore `x264enc`. |
 | SuperSplat viewport black / "context lost" on big scenes | GPU out of VRAM — move to the GPU with most free memory (§4.4). |
 | Web UI loads but spinner forever *and* no `/turn` request in nginx log | The app's `fetch("/turn")` promise died silently (it has no `.catch`). Usually a client-side quirk — e.g. Firefox with `user:pass@` embedded in the URL. Log in via the auth prompt instead. |
+| `Permission denied` saving into `~/Documents` / `~/mount-data` | Host dirs owned by `jing.feng`, desktop user is uid 1000 → grant ACLs (§2) or copy in/out from the host side. |
 | Port 8080/3478 already in use at start | Host networking shares ports with every other service on this box — `ss -ltnp | grep -E ':8080|:3478'` and evict or re-port. |
 | Everything worked last month, dead today | Check `ip -4 addr` — if the lab re-addressed the host, update the three IPs in `.env` (§4.1–4.2) and recreate. |
 
@@ -183,6 +207,6 @@ docker exec selkies-supersplat bash -c '
   they saturate the SMs. VRAM headroom, not utilization, decides which GPU to
   pin (§4.4).
 - Anything opened inside the desktop dies on recreate; only `~/Documents`
-  survives. Firefox must be relaunched after each recreate (§5) — if that
+  and `~/mount-data` survive. Firefox must be relaunched after each recreate (§5) — if that
   becomes annoying, promote it to another supervisord include like
   `supervisor-supersplat.conf`.
