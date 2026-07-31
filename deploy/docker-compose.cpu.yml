@@ -3,19 +3,17 @@ services:
     image: ${SELKIES_IMAGE}
     container_name: selkies-supersplat
     restart: unless-stopped
-    runtime: nvidia
     network_mode: host
     shm_size: "2gb"
     stdin_open: true
     tty: true
     environment:
-      NVIDIA_VISIBLE_DEVICES: ${SELKIES_GPU_INDEX}
-      NVIDIA_DRIVER_CAPABILITIES: all
       SELKIES_ENABLE_BASIC_AUTH: "true"
       SELKIES_BASIC_AUTH_USER: ${SELKIES_BASIC_AUTH_USER}
       SELKIES_BASIC_AUTH_PASSWORD: ${SELKIES_BASIC_AUTH_PASSWORD}
       SELKIES_ENABLE_RESIZE: "true"
-      SELKIES_ENCODER: ${SELKIES_ENCODER}
+      # CPU host: x264enc is the only valid encoder here; never nv*/va*
+      SELKIES_ENCODER: x264enc
       SELKIES_FRAMERATE: ${SELKIES_FRAMERATE}
       SELKIES_VIDEO_BITRATE: ${SELKIES_VIDEO_BITRATE}
       START_XFCE4: "true"
@@ -25,15 +23,7 @@ services:
       TURN_EXTERNAL_IP: ${TURN_EXTERNAL_IP}
       TURN_EXTRA_ARGS: ${TURN_EXTRA_ARGS}
     volumes:
-      - /home/jing.feng/codebases/supersplat:/home/ubuntu/supersplat:ro
-      - /home/jing.feng/selkies-data:/home/ubuntu/Documents
+      - ${SUPERSPLAT_DIST_DIR}:/home/ubuntu/supersplat:ro
+      - ${SELKIES_DATA_DIR}:/home/ubuntu/Documents
       # Extra supervisord program: serves supersplat/dist on 127.0.0.1:8082
       - ./supervisor-supersplat.conf:/etc/supervisor/conf.d/supersplat.conf:ro
-      # Host mount-point dir: rslave so a share mounted there on the host
-      # after container start becomes visible inside without a recreate
-      - type: bind
-        source: /home/jing.feng/mounts/selkies-mount-data
-        target: /home/ubuntu/mount-data
-        bind:
-          propagation: rslave
-          create_host_path: true

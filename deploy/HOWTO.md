@@ -197,6 +197,7 @@ docker exec selkies-supersplat bash -c '
 | Web UI loads but spinner forever *and* no `/turn` request in nginx log | The app's `fetch("/turn")` promise died silently (it has no `.catch`). Usually a client-side quirk — e.g. Firefox with `user:pass@` embedded in the URL. Log in via the auth prompt instead. |
 | `Permission denied` saving into `~/Documents` / `~/mount-data` | Host dirs owned by `jing.feng`, desktop user is uid 1000 → grant ACLs (§2) or copy in/out from the host side. |
 | Port 8080/3478 already in use at start | Host networking shares ports with every other service on this box — `ss -ltnp | grep -E ':8080|:3478'` and evict or re-port. |
+| Firefox window gone / won't reopen, WebGL dead, but the streamed desktop itself still works | Container lost GPU access: `docker exec selkies-supersplat nvidia-smi` says `Failed to initialize NVML: Unknown Error` and Firefox's log shows `libEGL ... failed to create dri2 screen`. Known nvidia-container bug — a host `systemctl daemon-reload` revokes the running container's device-cgroup access. The stream survives because Xvfb/x264 are CPU-only; everything through VirtualGL dies. Fix: recreate (§5) — `docker restart` is not enough and trips the stale-`/tmp` trap. Check GPU occupancy first (§4.4). |
 | Everything worked last month, dead today | Check `ip -4 addr` — if the lab re-addressed the host, update the three IPs in `.env` (§4.1–4.2) and recreate. |
 
 ## 10. Known limitations
@@ -210,3 +211,29 @@ docker exec selkies-supersplat bash -c '
   and `~/mount-data` survive. Firefox must be relaunched after each recreate (§5) — if that
   becomes annoying, promote it to another supervisord include like
   `supervisor-supersplat.conf`.
+
+## 11. CPU-only variant (hosts without a GPU)
+
+`docker-compose.cpu.yml` + `.env.cpu.example` deploy the same stack on a
+GPU-less host: no `runtime: nvidia`, no NVIDIA env vars, encoder pinned to
+`x264enc` (the stream path is unchanged — it was already CPU-encoded on the
+A100). Paths and IPs are fully parameterized; `container_name` stays
+`selkies-supersplat`, so every command in this runbook works verbatim.
+
+```bash
+cp .env.cpu.example .env && chmod 600 .env    # then edit paths/IPs/password
+docker-compose -f docker-compose.cpu.yml --env-file .env up -d --force-recreate
+docker exec -d selkies-supersplat bash -c \
+  'firefox --new-instance http://localhost:8082/ >/tmp/firefox.log 2>&1'
+```
+
+Differences from the GPU deployment:
+
+- Launch Firefox **without** `vglrun` (as above): WebGL renders on llvmpipe
+  (software rasterizer). Fine for small/medium splat scenes; multi-million
+  gaussian scenes will crawl and saturate cores while orbiting.
+- Verification (§6): skip step 6. Inside SuperSplat the renderer reporting
+  `llvmpipe`/"Software" is *correct* on this variant — not the CPU-fallback
+  failure it would indicate on a GPU host.
+- Not yet end-to-end tested on a GPU-less host; §6 steps 1–5 and 7 are the
+  acceptance test on first deploy.
