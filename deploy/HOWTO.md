@@ -237,3 +237,35 @@ Differences from the GPU deployment:
   failure it would indicate on a GPU host.
 - Not yet end-to-end tested on a GPU-less host; §6 steps 1–5 and 7 are the
   acceptance test on first deploy.
+
+### iGPU tier (Intel/AMD integrated graphics)
+
+If the CPU host has an iGPU (`ls /dev/dri` shows a `renderD*` node), stack
+the `docker-compose.igpu.yml` overlay for hardware GL — measured 2.5× on
+moderate shading (glxspheres 76 → 192 Mpix/s on a UHD 730), more on splat
+scenes where software per-pixel cost explodes:
+
+```bash
+stat -c %g /dev/dri/card* /dev/dri/renderD*   # → DRI_VIDEO_GID / DRI_RENDER_GID in .env
+docker compose -f docker-compose.cpu.yml -f docker-compose.igpu.yml \
+  --env-file .env up -d --force-recreate
+```
+
+With the overlay, launch Firefox **with** `vglrun` (the §5 command, not the
+plain-firefox one above) — VirtualGL adopts the iGPU as its EGL device.
+Verify with §6 step 6: expect the iGPU name (e.g. "Mesa Intel(R) UHD
+Graphics 730"); `llvmpipe` there means the overlay didn't take. Trivial
+scenes can appear *slower* through VirtualGL (readback overhead caps
+~180 fps at 1.2 MP) — the win is on heavy scenes, which is the case that
+matters.
+
+**Known broken: SuperSplat gaussian rendering through VirtualGL+iris.**
+Scene loads (splat count OK), viewport stays empty, console shows a
+"Tex image ... lazy initialization" WebGL warning: the splat-data float
+textures read as zeros through VGL's EGL backend on Mesa iris, so every
+splat collapses to a zero-size point. Same code works on NVIDIA-GL (dev01)
+and on plain llvmpipe. Until fixed upstream, launch Firefox WITHOUT
+`vglrun` for SuperSplat work on iGPU hosts (llvmpipe: correct but
+software-slow — subsample big checkpoints to ≲300k splats; a stride-11
+python subsampler took garden 2.28M→207k and renders fine). The overlay
+still benefits non-splat GL apps.

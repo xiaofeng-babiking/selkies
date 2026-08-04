@@ -25,5 +25,7 @@ services:
     volumes:
       - ${SUPERSPLAT_DIST_DIR}:/home/ubuntu/supersplat:ro
       - ${SELKIES_DATA_DIR}:/home/ubuntu/Documents
+      # Bulk splat data (checkpoints, captures): read-only in the desktop
+      - ${DATASETS_DIR}:/home/ubuntu/datasets:ro
       # Extra supervisord program: serves supersplat/dist on 127.0.0.1:8082
       - ./supervisor-supersplat.conf:/etc/supervisor/conf.d/supersplat.conf:ro

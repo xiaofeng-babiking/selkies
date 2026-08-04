@@ -1,0 +1,15 @@
+# Overlay for docker-compose.cpu.yml: pass the host's DRI nodes (Intel/AMD
+# iGPU) into the container for hardware GL via VirtualGL, instead of llvmpipe.
+#
+#   docker compose -f docker-compose.cpu.yml -f docker-compose.igpu.yml \
+#     --env-file .env up -d --force-recreate
+#
+# Gids from:  stat -c %g /dev/dri/card* /dev/dri/renderD*   (usually 44/110).
+# With this overlay, launch Firefox WITH vglrun (HOWTO §5), not plain (§11).
+services:
+  selkies:
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - "${DRI_VIDEO_GID}"
+      - "${DRI_RENDER_GID}"
